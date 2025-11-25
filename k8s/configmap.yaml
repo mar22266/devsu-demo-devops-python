@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devsu-python-config
+  namespace: devsu-demo
+data:
+  DATABASE_NAME: db.sqlite3
