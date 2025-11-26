@@ -71,7 +71,7 @@ jobs:
           vuln-type: "os,library"
           severity: "CRITICAL,HIGH"
 
-    deploy:
+  deploy:
     needs: docker-build-and-push
     runs-on: self-hosted
     if: github.ref == 'refs/heads/main'
