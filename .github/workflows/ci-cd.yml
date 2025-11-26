@@ -1,39 +1,106 @@
-deploy:
-  needs: docker-build-and-push
-  runs-on: self-hosted
-  if: github.ref == 'refs/heads/main'
+name: CI-CD
 
-  steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
 
-    - name: Set up kubectl
-      uses: azure/setup-kubectl@v4
-      with:
-        version: "v1.34.0"
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }} # owner/repo
 
-    - name: Apply Kubernetes manifests to local minikube
-      env:
-        IMAGE_TAG: ${{ github.sha }}
-        REGISTRY: ghcr.io
-      run: |
-        IMAGE=${REGISTRY}/${GITHUB_REPOSITORY}:${IMAGE_TAG}
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
 
-        echo "Usando imagen: $IMAGE"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-        # Reemplazar placeholder de la imagen en el deployment
-        sed -i "s|IMAGE_PLACEHOLDER|$IMAGE|g" k8s/deployment.yaml
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-        # Aplicar manifiestos usando el kubeconfig local (~/.kube/config)
-        kubectl apply -f k8s/namespace.yaml
-        kubectl apply -f k8s/configmap.yaml
-        kubectl apply -f k8s/secret.yaml
-        kubectl apply -f k8s/deployment.yaml
-        kubectl apply -f k8s/service.yaml
-        kubectl apply -f k8s/ingress.yaml
-        kubectl apply -f k8s/hpa.yaml
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-    - name: Show rollout status
-      run: |
-        kubectl -n devsu-demo rollout status deployment/devsu-python-api
-        kubectl -n devsu-demo get pods,svc,ingress
+      - name: Run unit tests with coverage
+        run: |
+          coverage run manage.py test
+          coverage report -m
+
+      - name: Run flake8 (static code analysis)
+        run: |
+          flake8
+
+  docker-build-and-push:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        run: |
+          IMAGE=${{ env.REGISTRY }}/${{ github.repository }}:${{ github.sha }}
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          docker build -t $IMAGE .
+          docker push $IMAGE
+
+      # Opcional: escaneo de vulnerabilidades
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ github.repository }}:${{ github.sha }}
+          format: "table"
+          exit-code: "0"
+          vuln-type: "os,library"
+          severity: "CRITICAL,HIGH"
+
+  deploy:
+    needs: docker-build-and-push
+    runs-on: self-hosted
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: "v1.34.0"
+
+      - name: Apply Kubernetes manifests to local minikube
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          REGISTRY: ghcr.io
+        run: |
+          IMAGE=${REGISTRY}/${GITHUB_REPOSITORY}:${IMAGE_TAG}
+
+          echo "Usando imagen: $IMAGE"
+
+          # Reemplazar placeholder de la imagen en el deployment
+          sed -i "s|IMAGE_PLACEHOLDER|$IMAGE|g" k8s/deployment.yaml
+
+          # Aplicar manifiestos usando el kubeconfig local (~/.kube/config)
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/configmap.yaml
+          kubectl apply -f k8s/secret.yaml
+          kubectl apply -f k8s/deployment.yaml
+          kube
