@@ -8,7 +8,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }} # owner/repo
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-and-test:
@@ -62,7 +62,6 @@ jobs:
           docker build -t $IMAGE .
           docker push $IMAGE
 
-      # Opcional: escaneo de vulnerabilidades
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -72,7 +71,7 @@ jobs:
           vuln-type: "os,library"
           severity: "CRITICAL,HIGH"
 
-  deploy:
+    deploy:
     needs: docker-build-and-push
     runs-on: self-hosted
     if: github.ref == 'refs/heads/main'
@@ -95,6 +94,9 @@ jobs:
 
           echo "Usando imagen: $IMAGE"
 
+          # Revertir deployment.yaml al estado del repo (para que siempre exista IMAGE_PLACEHOLDER)
+          git checkout -- k8s/deployment.yaml
+
           # Reemplazar placeholder de la imagen en el deployment
           sed -i "s|IMAGE_PLACEHOLDER|$IMAGE|g" k8s/deployment.yaml
 
@@ -103,4 +105,11 @@ jobs:
           kubectl apply -f k8s/configmap.yaml
           kubectl apply -f k8s/secret.yaml
           kubectl apply -f k8s/deployment.yaml
-          kube
+          kubectl apply -f k8s/service.yaml
+          kubectl apply -f k8s/ingress.yaml
+          kubectl apply -f k8s/hpa.yaml
+
+      - name: Show rollout status
+        run: |
+          kubectl -n devsu-demo rollout status deployment/devsu-python-api
+          kubectl -n devsu-demo get pods,svc,ingress,hpa
